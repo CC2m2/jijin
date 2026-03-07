@@ -28,6 +28,7 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+*.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -44,3 +45,6 @@ env/
 *.db
 *.pid
 *.seed
+
+# Build metadata
+*.tsbuildinfo

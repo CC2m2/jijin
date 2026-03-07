@@ -1,0 +1,27 @@
+[project]
+name = "fund-valuation-backend"
+version = "0.1.0"
+description = "Fund valuation MVP backend"
+requires-python = ">=3.11"
+dependencies = [
+  "akshare>=1.16.70",
+  "fastapi>=0.115.8",
+  "pandas>=2.2.3",
+  "pydantic-settings>=2.7.1",
+  "sqlalchemy>=2.0.37",
+  "uvicorn[standard]>=0.34.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28.1",
+  "pytest>=8.3.4"
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
