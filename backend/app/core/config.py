@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     app_name: str = "Fund Valuation MVP"
     api_v1_prefix: str = "/api/v1"
     sqlite_db_path: Path = Path("./data/app.db")
-    akshare_timeout_seconds: float = 10.0
+    fund_data_timeout_seconds: float = 10.0
     cache_ttl_seconds: int = 180
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 

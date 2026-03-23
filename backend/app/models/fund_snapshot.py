@@ -15,5 +15,5 @@ class FundSnapshot(Base):
     unit_nav: Mapped[float | None] = mapped_column(Float, nullable=True)
     estimated_nav: Mapped[float | None] = mapped_column(Float, nullable=True)
     change_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
-    source: Mapped[str] = mapped_column(String(32), default="akshare")
+    source: Mapped[str] = mapped_column(String(32), default="tiantian-fund")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+import ast
+import json
 import math
 import re
 import threading
 import time
 from datetime import datetime
+from urllib import parse, request
 from typing import Any
-
-import akshare as ak
-import pandas as pd
 
 from app.core.config import settings
 from app.core.exceptions import ExternalDataError
@@ -40,26 +39,29 @@ def _sanitize_text(value: Any) -> str | None:
 
 
 class FundDataService:
+    FUND_NAME_JS_URL = "https://fund.eastmoney.com/js/fundcode_search.js"
+    FUND_ESTIMATION_URL = "https://fundgz.1234567.com.cn/js/{fund_code}.js"
+    FUND_HISTORY_URL = "https://api.fund.eastmoney.com/f10/lsjz"
+
     def __init__(self) -> None:
         self._cache: dict[str, tuple[float, Any]] = {}
         self._lock = threading.Lock()
 
     def _run_with_timeout(self, loader: Any, error_message: str) -> Any:
-        executor = ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(loader)
         try:
-            return future.result(timeout=settings.akshare_timeout_seconds)
-        except FutureTimeoutError as exc:
-            future.cancel()
+            return loader()
+        except TimeoutError as exc:
             raise ExternalDataError(
-                f"{error_message}: 外部数据源响应超时，已超过 {settings.akshare_timeout_seconds:.0f} 秒"
+                f"{error_message}: 外部数据源响应超时，已超过 {settings.fund_data_timeout_seconds:.0f} 秒"
             ) from exc
         except ExternalDataError:
             raise
         except Exception as exc:
+            if "timed out" in str(exc).lower():
+                raise ExternalDataError(
+                    f"{error_message}: 外部数据源响应超时，已超过 {settings.fund_data_timeout_seconds:.0f} 秒"
+                ) from exc
             raise ExternalDataError(f"{error_message}: {exc}") from exc
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
 
     def _get_or_load(self, key: str, loader: Any, refresh: bool = False) -> Any:
         with self._lock:
@@ -73,118 +75,118 @@ class FundDataService:
             self._cache[key] = (time.time() + settings.cache_ttl_seconds, value)
         return value
 
+    def _http_get(self, url: str, params: dict[str, Any] | None = None, referer: str | None = None) -> str:
+        query = f"?{parse.urlencode(params)}" if params else ""
+        req = request.Request(
+            url=f"{url}{query}",
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": referer or "https://fund.eastmoney.com/",
+            },
+        )
+        with request.urlopen(req, timeout=settings.fund_data_timeout_seconds) as resp:
+            return resp.read().decode("utf-8", errors="ignore")
+
+    def _parse_jsonp(self, content: str) -> dict[str, Any]:
+        matched = re.search(r"\((\{.*\})\)", content, re.S)
+        if not matched:
+            raise ExternalDataError("天天基金返回了无法解析的估算数据")
+        try:
+            return json.loads(matched.group(1))
+        except json.JSONDecodeError as exc:
+            raise ExternalDataError("天天基金估算数据格式异常") from exc
+
     def _load_fund_names(self) -> dict[str, dict[str, str | None]]:
-        data = self._run_with_timeout(ak.fund_name_em, "获取基金基础信息失败")
-
-        result: dict[str, dict[str, str | None]] = {}
-        for _, row in data.iterrows():
-            code = _sanitize_text(row.get("基金代码"))
-            if not code:
-                continue
-            result[code] = {
-                "fund_name": _sanitize_text(row.get("基金简称")),
-                "fund_type": _sanitize_text(row.get("基金类型")),
-            }
-        return result
-
-    def _load_estimates(self) -> dict[str, dict[str, Any]]:
-        data = self._run_with_timeout(
-            lambda: ak.fund_value_estimation_em(symbol="全部"),
-            "获取基金估算失败",
+        content = self._run_with_timeout(
+            lambda: self._http_get(self.FUND_NAME_JS_URL),
+            "获取基金基础信息失败",
         )
 
-        estimate_col = next((col for col in data.columns if "估算值" in str(col)), None)
-        published_nav_col = next((col for col in data.columns if "公布数据-单位净值" in str(col)), None)
-        nav_date_col = next((col for col in data.columns if str(col).endswith("-单位净值") and "交易日-公布数据" not in str(col)), None)
-        estimate_rate_col = next((col for col in data.columns if "估算增长率" in str(col)), None)
-        published_rate_col = next((col for col in data.columns if "公布数据-日增长率" in str(col)), None)
+        matched = re.search(r"=\s*(\[.*\]);?", content, re.S)
+        if not matched:
+            raise ExternalDataError("天天基金基金列表返回格式异常")
 
-        result: dict[str, dict[str, Any]] = {}
-        for _, row in data.iterrows():
-            code = _sanitize_text(row.get("基金代码"))
-            if not code:
-                continue
-            nav_date = None
-            if nav_date_col:
-                matched = re.match(r"(\d{4}-\d{2}-\d{2})-单位净值", str(nav_date_col))
-                nav_date = matched.group(1) if matched else None
-            result[code] = {
-                "fund_code": code,
-                "fund_name": _sanitize_text(row.get("基金名称")),
-                "estimated_nav": _sanitize_value(row.get(estimate_col)) if estimate_col else None,
-                "unit_nav": _sanitize_value(row.get(published_nav_col)) if published_nav_col else None,
-                "estimate_change_rate": _sanitize_value(row.get(estimate_rate_col)) if estimate_rate_col else None,
-                "published_change_rate": _sanitize_value(row.get(published_rate_col)) if published_rate_col else None,
-                "nav_date": nav_date,
-                "source": "akshare-estimation",
-            }
-        return result
-
-    def _load_open_fund_daily(self) -> dict[str, dict[str, Any]]:
-        data = self._run_with_timeout(ak.fund_open_fund_daily_em, "获取开放式基金净值失败")
-
-        unit_nav_col = next((col for col in data.columns if col == "单位净值"), None)
-        if not unit_nav_col:
-            unit_nav_col = next((col for col in data.columns if str(col).endswith("-单位净值") and "前交易日" not in str(col)), None)
-        prev_unit_nav_col = next((col for col in data.columns if "前交易日" in str(col) and "单位净值" in str(col)), None)
-        change_rate_col = next((col for col in data.columns if "日增长率" in str(col)), None)
-        nav_date = None
-        if unit_nav_col:
-            matched = re.match(r"(\d{4}-\d{2}-\d{2})-单位净值", str(unit_nav_col))
-            nav_date = matched.group(1) if matched else datetime.now().date().isoformat()
-
-        result: dict[str, dict[str, Any]] = {}
-        for _, row in data.iterrows():
-            code = _sanitize_text(row.get("基金代码"))
-            if not code:
-                continue
-            result[code] = {
-                "fund_code": code,
-                "fund_name": _sanitize_text(row.get("基金简称")),
-                "unit_nav": _sanitize_value(row.get(unit_nav_col)) if unit_nav_col else None,
-                "prev_unit_nav": _sanitize_value(row.get(prev_unit_nav_col)) if prev_unit_nav_col else None,
-                "change_rate": _sanitize_value(row.get(change_rate_col)) if change_rate_col else None,
-                "nav_date": nav_date,
-                "source": "akshare-open-fund-daily",
-            }
-        return result
-
-    def _load_overview(self, fund_code: str) -> dict[str, Any]:
         try:
-            data = self._run_with_timeout(
-                lambda: ak.fund_overview_em(symbol=fund_code),
-                f"获取基金 {fund_code} 概览失败",
-            )
-        except Exception:
-            return {}
-        if isinstance(data, pd.DataFrame) and not data.empty:
-            row = data.iloc[0]
-            return {
-                "fund_name": _sanitize_text(row.get("基金简称")),
-                "fund_type": _sanitize_text(row.get("基金类型")),
-            }
-        return {}
+            rows = ast.literal_eval(matched.group(1))
+        except (SyntaxError, ValueError) as exc:
+            raise ExternalDataError("天天基金基金列表解析失败") from exc
 
-    def _load_fund_history(self, fund_code: str) -> dict[str, Any]:
-        data = self._run_with_timeout(
-            lambda: ak.fund_open_fund_info_em(symbol=fund_code, indicator="单位净值走势"),
+        result: dict[str, dict[str, str | None]] = {}
+        for row in rows:
+            if not isinstance(row, (list, tuple)) or len(row) < 4:
+                continue
+            code = _sanitize_text(row[0])
+            if not code:
+                continue
+            result[code] = {
+                "fund_name": _sanitize_text(row[2]),
+                "fund_type": _sanitize_text(row[3]),
+            }
+        return result
+
+    def _load_estimate(self, fund_code: str) -> dict[str, Any]:
+        content = self._run_with_timeout(
+            lambda: self._http_get(
+                self.FUND_ESTIMATION_URL.format(fund_code=fund_code),
+                params={"rt": int(time.time() * 1000)},
+                referer=f"https://fund.eastmoney.com/{fund_code}.html",
+            ),
+            f"获取基金 {fund_code} 估算失败",
+        )
+        payload = self._parse_jsonp(content)
+        return {
+            "fund_code": fund_code,
+            "fund_name": _sanitize_text(payload.get("name")),
+            "estimated_nav": _sanitize_value(payload.get("gsz")),
+            "unit_nav": _sanitize_value(payload.get("dwjz")),
+            "estimate_change_rate": _sanitize_value(payload.get("gszzl")),
+            "published_change_rate": None,
+            "nav_date": _sanitize_text(payload.get("jzrq")),
+            "source": "tiantian-fund-estimation",
+        }
+
+    def _load_fund_history_rows(self, fund_code: str, page_size: int = 120) -> list[dict[str, Any]]:
+        content = self._run_with_timeout(
+            lambda: self._http_get(
+                self.FUND_HISTORY_URL,
+                params={
+                    "fundCode": fund_code,
+                    "pageIndex": 1,
+                    "pageSize": page_size,
+                },
+                referer="https://fundf10.eastmoney.com/",
+            ),
             f"获取基金 {fund_code} 历史净值失败",
         )
 
-        if not isinstance(data, pd.DataFrame) or data.empty:
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise ExternalDataError(f"基金 {fund_code} 历史净值数据格式异常") from exc
+
+        data = payload.get("Data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            return []
+        rows = data.get("LSJZList")
+        return rows if isinstance(rows, list) else []
+
+    def _load_fund_history(self, fund_code: str) -> dict[str, Any]:
+        rows = self._load_fund_history_rows(fund_code=fund_code, page_size=120)
+        if not rows:
             raise ExternalDataError(f"基金 {fund_code} 缺少历史净值数据")
 
         points: list[dict[str, Any]] = []
-        for _, row in data.tail(120).iterrows():
-            nav_date = _sanitize_text(row.get("净值日期"))
-            unit_nav = _sanitize_value(row.get("单位净值"))
+        for row in rows:
+            nav_date_raw = _sanitize_text(row.get("FSRQ"))
+            nav_date = nav_date_raw.split(" ")[0] if nav_date_raw else None
+            unit_nav = _sanitize_value(row.get("DWJZ"))
             if not nav_date or unit_nav is None:
                 continue
             points.append(
                 {
                     "nav_date": nav_date,
                     "unit_nav": unit_nav,
-                    "change_rate": _sanitize_value(row.get("日增长率")),
+                    "change_rate": _sanitize_value(row.get("JZZZL")),
                 }
             )
 
@@ -192,32 +194,39 @@ class FundDataService:
         return {
             "fund_code": fund_code,
             "fund_name": fund_info.get("fund_name") or fund_code,
-            "source": "akshare-open-fund-history",
+            "source": "tiantian-fund-history",
             "points": points,
         }
 
     def get_fund_info(self, fund_code: str, refresh: bool = False) -> dict[str, Any]:
-        names = self._get_or_load("fund_names", self._load_fund_names, refresh=refresh)
-        estimates = self._get_or_load("fund_estimates", self._load_estimates, refresh=refresh)
-        daily = self._get_or_load("fund_open_daily", self._load_open_fund_daily, refresh=refresh)
+        estimate_info = self._get_or_load(
+            f"fund_estimate:{fund_code}",
+            lambda: self._load_estimate(fund_code),
+            refresh=refresh,
+        )
 
-        name_info = names.get(fund_code, {})
-        estimate_info = estimates.get(fund_code, {})
-        daily_info = daily.get(fund_code, {})
-        overview = self._load_overview(fund_code) if not name_info.get("fund_name") else {}
+        name_info: dict[str, Any] = {}
+        try:
+            names = self._get_or_load("fund_names", self._load_fund_names, refresh=refresh)
+            name_info = names.get(fund_code, {})
+        except Exception:
+            name_info = {}
 
-        fund_name = estimate_info.get("fund_name") or daily_info.get("fund_name") or name_info.get("fund_name") or overview.get("fund_name")
-        fund_type = name_info.get("fund_type") or overview.get("fund_type")
+        if not estimate_info and not name_info:
+            raise ExternalDataError(f"未找到基金 {fund_code} 的有效数据")
+
+        fund_name = estimate_info.get("fund_name") or name_info.get("fund_name")
+        fund_type = name_info.get("fund_type")
         estimated_nav = estimate_info.get("estimated_nav")
-        unit_nav = estimate_info.get("unit_nav") or daily_info.get("unit_nav")
+        unit_nav = estimate_info.get("unit_nav")
         change_rate = estimate_info.get("estimate_change_rate")
         if change_rate is None:
-            change_rate = estimate_info.get("published_change_rate") or daily_info.get("change_rate")
+            change_rate = estimate_info.get("published_change_rate")
 
         if not fund_name and unit_nav is None and estimated_nav is None:
             raise ExternalDataError(f"未找到基金 {fund_code} 的有效数据")
 
-        source = estimate_info.get("source") if estimated_nav is not None else daily_info.get("source", "akshare")
+        source = estimate_info.get("source", "tiantian-fund")
         return {
             "fund_code": fund_code,
             "fund_name": fund_name or fund_code,
@@ -225,7 +234,7 @@ class FundDataService:
             "estimated_nav": estimated_nav,
             "unit_nav": unit_nav,
             "change_rate": change_rate,
-            "nav_date": estimate_info.get("nav_date") or daily_info.get("nav_date"),
+            "nav_date": estimate_info.get("nav_date") or datetime.now().date().isoformat(),
             "source": source,
         }
 

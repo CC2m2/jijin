@@ -49,7 +49,7 @@ class ValuationService:
                 unit_nav=fund_info.get("unit_nav"),
                 estimated_nav=fund_info.get("estimated_nav"),
                 change_rate=fund_info.get("change_rate"),
-                source=fund_info.get("source") or "akshare",
+                source=fund_info.get("source") or "tiantian-fund",
             )
             db.add(snapshot)
             db.commit()

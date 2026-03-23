@@ -13,7 +13,7 @@
 
 ## 技术栈
 
-- 后端：FastAPI、SQLAlchemy、SQLite、AKShare、Pydantic
+- 后端：FastAPI、SQLAlchemy、SQLite、天天基金（东方财富接口）、Pydantic
 - 前端：React 19、Vite、TypeScript、Ant Design、ECharts、Axios
 
 ## 目录结构
@@ -52,7 +52,7 @@ jijin/
 ```bash
 cd backend
 python -m venv .venv
-.venv\Scripts\activate
+source .venv/Scripts/activate
 pip install -e .[dev]
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
@@ -119,14 +119,14 @@ npm run build
 
 ## 数据来源策略
 
-- 优先使用 `ak.fund_value_estimation_em(symbol="全部")` 获取估算净值
-- 无估算数据时，降级到 `ak.fund_open_fund_daily_em()` 获取最新公布净值
-- 历史净值趋势使用 `ak.fund_open_fund_info_em(symbol=fund_code, indicator="单位净值走势")`
-- 基金名称优先取估算数据，其次开放式基金日数据，再次基金基础信息和基金概况
+- 基金估算净值使用天天基金估算接口 `fundgz.1234567.com.cn/js/{fund_code}.js`
+- 历史净值趋势使用天天基金 F10 接口 `api.fund.eastmoney.com/f10/lsjz`
+- 基金基础信息使用基金代码列表 `fund.eastmoney.com/js/fundcode_search.js`
+- 接口层统一做超时控制、缓存和异常包装
 
 ## 已知说明
 
-- 基金历史趋势依赖 AKShare 和上游数据源，偶发超时属于外部数据波动
+- 基金历史趋势依赖天天基金与上游数据源，偶发超时属于外部数据波动
 - 当前项目为单机 MVP，未引入鉴权、多用户和生产部署配置
 - 前端错误提示已区分后端业务错误、超时错误和无响应错误
 
