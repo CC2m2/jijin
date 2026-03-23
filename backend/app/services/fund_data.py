@@ -6,7 +6,7 @@ import math
 import re
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime
 from urllib import parse, request
 from typing import Any
 
@@ -227,6 +227,25 @@ class FundDataService:
             raise ExternalDataError(f"未找到基金 {fund_code} 的有效数据")
 
         source = estimate_info.get("source", "tiantian-fund")
+        nav_date = estimate_info.get("nav_date") or datetime.now().date().isoformat()
+
+        if nav_date == date.today().isoformat():
+            published_metrics = self.find_history_metrics_by_date(
+                fund_code=fund_code,
+                target_date=date.today(),
+                refresh=refresh,
+            )
+            if published_metrics:
+                published_unit_nav = published_metrics.get("unit_nav")
+                published_change_rate = published_metrics.get("change_rate")
+                if published_unit_nav is not None:
+                    unit_nav = published_unit_nav
+                if published_change_rate is not None:
+                    change_rate = published_change_rate
+                # Today's official NAV is available, so downstream should treat this as final data.
+                estimated_nav = None
+                source = "tiantian-fund-published"
+
         return {
             "fund_code": fund_code,
             "fund_name": fund_name or fund_code,
@@ -234,7 +253,7 @@ class FundDataService:
             "estimated_nav": estimated_nav,
             "unit_nav": unit_nav,
             "change_rate": change_rate,
-            "nav_date": estimate_info.get("nav_date") or datetime.now().date().isoformat(),
+            "nav_date": nav_date,
             "source": source,
         }
 
@@ -244,3 +263,66 @@ class FundDataService:
             lambda: self._load_fund_history(fund_code),
             refresh=refresh,
         )
+
+    def get_unit_nav_by_date(self, fund_code: str, target_date: date, refresh: bool = False) -> float:
+        rows = self._get_or_load(
+            f"fund_history_rows:{fund_code}:1000",
+            lambda: self._load_fund_history_rows(fund_code=fund_code, page_size=1000),
+            refresh=refresh,
+        )
+
+        target = target_date.isoformat()
+        for row in rows:
+            nav_date_raw = _sanitize_text(row.get("FSRQ"))
+            nav_date = nav_date_raw.split(" ")[0] if nav_date_raw else None
+            if nav_date != target:
+                continue
+            unit_nav = _sanitize_value(row.get("DWJZ"))
+            if unit_nav is None:
+                break
+            return unit_nav
+
+        raise ExternalDataError(
+            f"基金 {fund_code} 在 {target} 的单位净值尚未公布或当天非交易日，"
+            "通常需要在下一个交易日确认份额"
+        )
+
+    def find_unit_nav_by_date(self, fund_code: str, target_date: date, refresh: bool = False) -> float | None:
+        rows = self._get_or_load(
+            f"fund_history_rows:{fund_code}:1000",
+            lambda: self._load_fund_history_rows(fund_code=fund_code, page_size=1000),
+            refresh=refresh,
+        )
+
+        target = target_date.isoformat()
+        for row in rows:
+            nav_date_raw = _sanitize_text(row.get("FSRQ"))
+            nav_date = nav_date_raw.split(" ")[0] if nav_date_raw else None
+            if nav_date != target:
+                continue
+            return _sanitize_value(row.get("DWJZ"))
+        return None
+
+    def find_history_metrics_by_date(
+        self,
+        fund_code: str,
+        target_date: date,
+        refresh: bool = False,
+    ) -> dict[str, float | None] | None:
+        rows = self._get_or_load(
+            f"fund_history_rows:{fund_code}:1000",
+            lambda: self._load_fund_history_rows(fund_code=fund_code, page_size=1000),
+            refresh=refresh,
+        )
+
+        target = target_date.isoformat()
+        for row in rows:
+            nav_date_raw = _sanitize_text(row.get("FSRQ"))
+            nav_date = nav_date_raw.split(" ")[0] if nav_date_raw else None
+            if nav_date != target:
+                continue
+            return {
+                "unit_nav": _sanitize_value(row.get("DWJZ")),
+                "change_rate": _sanitize_value(row.get("JZZZL")),
+            }
+        return None

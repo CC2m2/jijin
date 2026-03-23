@@ -4,9 +4,10 @@
 
 ## 项目能力
 
-- 持仓新增、编辑、删除
+- 持仓更新（买入金额 / 卖出金额）、删除
 - 单基金估值
 - 组合总览估值
+- 净值未更新时记录待处理金额（待确认金额 / 待卖出金额），净值更新后自动确认份额
 - 估值失败项保留错误信息，不阻断其他基金计算
 - 基金历史净值趋势查看
 - 本地 SQLite 持久化存储
@@ -80,7 +81,7 @@ npm run dev
 
 - 本地数据库文件：`backend/data/app.db`
 - 后端启动时会自动创建表结构
-- 若历史数据库缺少 `position_date` 字段，后端会在启动时自动补齐并回填数据
+- 若历史数据库缺少 `position_date` 或 `pending_amount` 字段，后端会在启动时自动补齐并回填数据
 
 ## 常用命令
 
@@ -103,9 +104,43 @@ npm run build
 ### 持仓管理
 
 - `GET /api/v1/positions`：获取持仓列表
-- `POST /api/v1/positions`：新增持仓
-- `PUT /api/v1/positions/{id}`：更新持仓
+- `POST /api/v1/positions`：创建初始持仓（仅支持 `trade_type=buy`）
+- `PUT /api/v1/positions/{id}`：更新持仓（支持买入/卖出金额）
 - `DELETE /api/v1/positions/{id}`：删除持仓
+
+#### 持仓更新规则
+
+- 请求字段统一使用金额：`amount`
+- 交易方向使用：`trade_type`，可选 `buy` / `sell`
+- 买入与卖出逻辑对称：
+	- 当日单位净值可用：立即按当日净值确认份额
+	- 当日单位净值不可用（通常 15:00 前）：先写入待处理金额，展示为
+		- 买入：`pending_amount > 0`，前端展示“待确认金额”
+		- 卖出：`pending_amount < 0`，前端展示“待卖出金额”
+- 后续刷新估值后，若当日单位净值已公布，会自动确认 pending 对应的份额变动
+
+#### 请求示例
+
+`POST /api/v1/positions`
+
+```json
+{
+	"fund_code": "161725",
+	"position_date": "2026-03-24",
+	"amount": 10000,
+	"trade_type": "buy"
+}
+```
+
+`PUT /api/v1/positions/{id}`
+
+```json
+{
+	"position_date": "2026-03-24",
+	"amount": 2000,
+	"trade_type": "sell"
+}
+```
 
 ### 基金信息
 

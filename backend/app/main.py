@@ -20,6 +20,9 @@ def ensure_sqlite_schema() -> None:
             connection.exec_driver_sql(
                 "UPDATE positions SET position_date = COALESCE(date(created_at), date('now')) WHERE position_date IS NULL"
             )
+        if "pending_amount" not in columns:
+            connection.exec_driver_sql("ALTER TABLE positions ADD COLUMN pending_amount FLOAT DEFAULT 0")
+            connection.exec_driver_sql("UPDATE positions SET pending_amount = 0 WHERE pending_amount IS NULL")
 
 
 Base.metadata.create_all(bind=engine)

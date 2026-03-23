@@ -15,5 +15,6 @@ class Position(Base):
     position_date: Mapped[date] = mapped_column(Date, index=True, default=date.today)
     shares: Mapped[float] = mapped_column(Float)
     avg_cost: Mapped[float] = mapped_column(Float)
+    pending_amount: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
