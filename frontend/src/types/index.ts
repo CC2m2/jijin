@@ -5,6 +5,7 @@ export interface Position {
   position_date: string;
   shares: number;
   avg_cost: number;
+  pending_amount: number;
   created_at: string;
   updated_at: string;
 }

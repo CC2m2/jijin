@@ -4,8 +4,8 @@ import type { FundHistory, FundInfo, PortfolioValuation, Position, ValuationItem
 type PositionPayload = {
   fund_code: string;
   position_date: string;
-  shares: number;
-  avg_cost: number;
+  amount: number;
+  trade_type: "buy" | "sell";
 };
 
 export async function fetchPositions(): Promise<Position[]> {

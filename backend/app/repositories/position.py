@@ -19,24 +19,46 @@ class PositionRepository:
             raise NotFoundError("持仓不存在")
         return position
 
-    def create(self, payload: PositionCreate, fund_name: str | None = None) -> Position:
+    def create(
+        self,
+        payload: PositionCreate,
+        shares: float,
+        avg_cost: float,
+        pending_amount: float,
+        fund_name: str | None = None,
+    ) -> Position:
         position = Position(
             fund_code=payload.fund_code,
             fund_name=fund_name,
             position_date=payload.position_date,
-            shares=payload.shares,
-            avg_cost=payload.avg_cost,
+            shares=shares,
+            avg_cost=avg_cost,
+            pending_amount=pending_amount,
         )
         self.db.add(position)
         self.db.commit()
         self.db.refresh(position)
         return position
 
-    def update(self, position_id: int, payload: PositionUpdate, fund_name: str | None = None) -> Position:
+    def update(
+        self,
+        position_id: int,
+        payload: PositionUpdate,
+        shares: float | None = None,
+        avg_cost: float | None = None,
+        pending_amount: float | None = None,
+        fund_name: str | None = None,
+    ) -> Position:
         position = self.get(position_id)
-        updates = payload.model_dump(exclude_unset=True)
+        updates = payload.model_dump(exclude={"amount", "trade_type"}, exclude_unset=True)
         for key, value in updates.items():
             setattr(position, key, value)
+        if shares is not None:
+            position.shares = shares
+        if avg_cost is not None:
+            position.avg_cost = avg_cost
+        if pending_amount is not None:
+            position.pending_amount = pending_amount
         if fund_name is not None:
             position.fund_name = fund_name
         self.db.commit()

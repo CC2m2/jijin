@@ -30,5 +30,5 @@ export function PortfolioChart({ items }: PortfolioChartProps) {
     ],
   };
 
-  return <ReactECharts option={option} style={{ height: 320 }} />;
+  return <ReactECharts option={option} style={{ height: "100%", minHeight: 300 }} />;
 }

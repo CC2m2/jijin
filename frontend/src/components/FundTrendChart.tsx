@@ -29,7 +29,7 @@ export function FundTrendChart({ history, loading = false }: FundTrendChartProps
       {
         data: points.map((point) => point.unit_nav),
         type: "line",
-        smooth: true,
+        smooth: false,
         showSymbol: false,
         lineStyle: { width: 3, color: "#c97b2f" },
         areaStyle: {

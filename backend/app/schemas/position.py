@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -6,8 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 class PositionBase(BaseModel):
     fund_code: str = Field(min_length=4, max_length=32)
     position_date: date
-    shares: float = Field(gt=0)
-    avg_cost: float = Field(gt=0)
+
 
     @field_validator("fund_code")
     @classmethod
@@ -19,14 +19,15 @@ class PositionBase(BaseModel):
 
 
 class PositionCreate(PositionBase):
-    pass
+    amount: float = Field(gt=0)
+    trade_type: Literal["buy", "sell"] = "buy"
 
 
 class PositionUpdate(BaseModel):
     fund_code: str | None = Field(default=None, min_length=4, max_length=32)
     position_date: date | None = None
-    shares: float | None = Field(default=None, gt=0)
-    avg_cost: float | None = Field(default=None, gt=0)
+    amount: float | None = Field(default=None, gt=0)
+    trade_type: Literal["buy", "sell"] = "buy"
 
     @field_validator("fund_code")
     @classmethod
@@ -40,6 +41,9 @@ class PositionUpdate(BaseModel):
 
 
 class PositionResponse(PositionBase):
+    shares: float = Field(ge=0)
+    avg_cost: float = Field(ge=0)
+    pending_amount: float
     id: int
     fund_name: str | None = None
     created_at: datetime
