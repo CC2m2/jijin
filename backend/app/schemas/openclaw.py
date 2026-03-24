@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class OpenClawToolMeta(BaseModel):
@@ -37,3 +37,14 @@ class OpenClawFundHistoryRequest(BaseModel):
     fund_code: str
     refresh: bool = False
     max_points: int = 60
+
+
+class OpenClawMarketOverviewRequest(BaseModel):
+    refresh: bool = False
+    board_limit: int = Field(default=5, ge=1, le=20)
+
+
+class OpenClawMarketAnalysisRequest(BaseModel):
+    refresh: bool = False
+    board_limit: int = Field(default=5, ge=1, le=20)
+    max_positions: int = Field(default=8, ge=1, le=20)
