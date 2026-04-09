@@ -15,6 +15,8 @@ from app.schemas.fund import FundHistoryResponse, FundInfoResponse
 from app.schemas.openclaw import (
     OpenClawFundBriefRequest,
     OpenClawFundHistoryRequest,
+    OpenClawMarketAnalysisRequest,
+    OpenClawMarketOverviewRequest,
     OpenClawPortfolioRequest,
     OpenClawToolError,
     OpenClawToolMeta,
@@ -22,6 +24,7 @@ from app.schemas.openclaw import (
 )
 from app.schemas.valuation import PortfolioValuationResponse
 from app.services.fund_data import FundDataService
+from app.services.market_analysis import MarketAnalysisService
 from app.services.valuation import ValuationService
 
 router = APIRouter()
@@ -29,6 +32,7 @@ logger = logging.getLogger("app.openclaw")
 
 fund_data_service = FundDataService()
 valuation_service = ValuationService(FundDataService())
+market_analysis_service = MarketAnalysisService()
 
 
 def _request_id(request: Request) -> str:
@@ -195,6 +199,94 @@ def openclaw_fund_history(body: OpenClawFundHistoryRequest, request: Request) ->
             request_id=request_id,
             tool=tool,
             data=result.model_dump(),
+            error=None,
+            meta=OpenClawToolMeta(cost_ms=cost_ms),
+        )
+    except AppError as exc:
+        error_code, message = _map_error(exc)
+        return _error_response(
+            tool=tool,
+            request=request,
+            start_time=start_time,
+            status_code=exc.status_code,
+            error_code=error_code,
+            message=message,
+        )
+    except Exception as exc:
+        return _error_response(
+            tool=tool,
+            request=request,
+            start_time=start_time,
+            status_code=500,
+            error_code="INTERNAL_ERROR",
+            message=str(exc),
+        )
+
+
+@router.post("/tools/market_overview", response_model=OpenClawToolResponse, dependencies=[Depends(verify_openclaw_token)])
+def openclaw_market_overview(body: OpenClawMarketOverviewRequest, request: Request) -> OpenClawToolResponse | JSONResponse:
+    start_time = time.perf_counter()
+    tool = "market_overview"
+    try:
+        result = market_analysis_service.get_market_overview(refresh=body.refresh, board_limit=body.board_limit)
+        request_id = _request_id(request)
+        cost_ms = _elapsed_ms(start_time)
+        logger.info("openclaw tool=%s request_id=%s status_code=200 cost_ms=%s", tool, request_id, cost_ms)
+        return OpenClawToolResponse(
+            ok=True,
+            request_id=request_id,
+            tool=tool,
+            data=result,
+            error=None,
+            meta=OpenClawToolMeta(cost_ms=cost_ms),
+        )
+    except AppError as exc:
+        error_code, message = _map_error(exc)
+        return _error_response(
+            tool=tool,
+            request=request,
+            start_time=start_time,
+            status_code=exc.status_code,
+            error_code=error_code,
+            message=message,
+        )
+    except Exception as exc:
+        return _error_response(
+            tool=tool,
+            request=request,
+            start_time=start_time,
+            status_code=500,
+            error_code="INTERNAL_ERROR",
+            message=str(exc),
+        )
+
+
+@router.post("/tools/market_analysis", response_model=OpenClawToolResponse, dependencies=[Depends(verify_openclaw_token)])
+def openclaw_market_analysis(
+    body: OpenClawMarketAnalysisRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> OpenClawToolResponse | JSONResponse:
+    start_time = time.perf_counter()
+    tool = "market_analysis"
+    try:
+        repo = PositionRepository(db)
+        portfolio_result = valuation_service.valuate_portfolio(repo.list_all(), db=db, refresh=body.refresh)
+        market_overview = market_analysis_service.get_market_overview(refresh=body.refresh, board_limit=body.board_limit)
+        result = market_analysis_service.build_market_analysis(
+            market_overview=market_overview,
+            portfolio=portfolio_result,
+            max_positions=body.max_positions,
+        )
+
+        request_id = _request_id(request)
+        cost_ms = _elapsed_ms(start_time)
+        logger.info("openclaw tool=%s request_id=%s status_code=200 cost_ms=%s", tool, request_id, cost_ms)
+        return OpenClawToolResponse(
+            ok=True,
+            request_id=request_id,
+            tool=tool,
+            data=result,
             error=None,
             meta=OpenClawToolMeta(cost_ms=cost_ms),
         )

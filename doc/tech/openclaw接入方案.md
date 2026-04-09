@@ -68,6 +68,8 @@ Phase 1 目标：先让 OpenClaw subagent 在单人场景下稳定可用，避�
 2. `POST /api/v1/openclaw/tools/portfolio_valuation`
 3. `POST /api/v1/openclaw/tools/fund_brief`
 4. `POST /api/v1/openclaw/tools/fund_history`
+5. `POST /api/v1/openclaw/tools/market_overview`
+6. `POST /api/v1/openclaw/tools/market_analysis`
 
 统一响应结构：
 

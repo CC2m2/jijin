@@ -152,6 +152,15 @@ npm run build
 - `POST /api/v1/valuation/fund`：计算单基金估值
 - `GET /api/v1/valuation/portfolio`：计算组合估值
 
+### OpenClaw 工具接口
+
+- `GET /api/v1/openclaw/health`：OpenClaw 健康检查
+- `POST /api/v1/openclaw/tools/portfolio_valuation`：组合估值工具
+- `POST /api/v1/openclaw/tools/fund_brief`：基金简报工具
+- `POST /api/v1/openclaw/tools/fund_history`：基金历史净值工具
+- `POST /api/v1/openclaw/tools/market_overview`：大盘概览（指数 + 板块涨跌）
+- `POST /api/v1/openclaw/tools/market_analysis`：综合分析（大盘 + 持仓 + 仓位）
+
 ## 数据来源策略
 
 - 基金估算净值使用天天基金估算接口 `fundgz.1234567.com.cn/js/{fund_code}.js`
