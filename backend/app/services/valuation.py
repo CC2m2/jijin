@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -104,8 +105,35 @@ class ValuationService:
         db.commit()
         db.refresh(position)
 
+    def _fetch_fund_infos_parallel(
+        self,
+        fund_codes: set[str],
+        refresh: bool,
+    ) -> tuple[dict[str, dict[str, object]], dict[str, Exception]]:
+        if not fund_codes:
+            return {}, {}
+
+        info_map: dict[str, dict[str, object]] = {}
+        error_map: dict[str, Exception] = {}
+        max_workers = min(8, max(1, len(fund_codes)))
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {
+                executor.submit(self.fund_data_service.get_fund_info, fund_code, refresh): fund_code
+                for fund_code in fund_codes
+            }
+            for future in as_completed(future_map):
+                fund_code = future_map[future]
+                try:
+                    info_map[fund_code] = future.result()
+                except Exception as exc:
+                    error_map[fund_code] = exc
+
+        return info_map, error_map
+
     def valuate_portfolio(self, positions: list[Position], db: Session | None = None, refresh: bool = False) -> PortfolioValuationResponse:
         items: list[FundValuationItem] = []
+        snapshots: list[FundSnapshot] = []
         total_cost = 0.0
         total_market_value = 0.0
         failed_count = 0
@@ -113,17 +141,17 @@ class ValuationService:
         for position in positions:
             self._try_confirm_pending_position(position, db=db, refresh=refresh)
 
+        fund_codes = {position.fund_code for position in positions}
+        fund_info_map, fund_error_map = self._fetch_fund_infos_parallel(fund_codes, refresh=refresh)
+
+        # Keep item order stable for API consumers.
+        for position in positions:
             if abs(position.pending_amount) > 1e-9:
                 failed_count += 1
                 cost_value = round(position.shares * position.avg_cost + position.pending_amount, 4)
                 total_cost += cost_value
 
-                pending_fund_info: dict[str, object] = {}
-                try:
-                    pending_fund_info = self.fund_data_service.get_fund_info(position.fund_code, refresh=refresh)
-                except Exception:
-                    pending_fund_info = {}
-
+                pending_fund_info = fund_info_map.get(position.fund_code, {})
                 pending_label = "待确认金额" if position.pending_amount > 0 else "待卖出金额"
                 items.append(
                     FundValuationItem(
@@ -145,16 +173,47 @@ class ValuationService:
                 continue
 
             try:
-                item = self.valuate_fund(
-                    FundValuationRequest(
-                        fund_code=position.fund_code,
-                        position_date=position.position_date.isoformat() if position.position_date else None,
-                        shares=position.shares,
-                        avg_cost=position.avg_cost,
-                        refresh=refresh,
-                    ),
-                    db=db,
+                if position.fund_code in fund_error_map:
+                    raise fund_error_map[position.fund_code]
+
+                fund_info = fund_info_map.get(position.fund_code)
+                if not fund_info:
+                    raise ValueError(f"未找到基金 {position.fund_code} 的有效数据")
+
+                price = fund_info.get("estimated_nav") or fund_info.get("unit_nav")
+                if price is None:
+                    raise ValueError(f"基金 {position.fund_code} 缺少估值和净值数据")
+
+                metrics = self.calculate_metrics(position.shares, position.avg_cost, price)
+                item = FundValuationItem(
+                    fund_code=position.fund_code,
+                    fund_name=fund_info.get("fund_name"),
+                    position_date=position.position_date.isoformat() if position.position_date else None,
+                    shares=position.shares,
+                    avg_cost=position.avg_cost,
+                    estimated_nav=fund_info.get("estimated_nav"),
+                    unit_nav=fund_info.get("unit_nav"),
+                    market_value=metrics.market_value,
+                    cost_value=metrics.cost_value,
+                    profit=metrics.profit,
+                    profit_rate=metrics.profit_rate,
+                    change_rate=fund_info.get("change_rate"),
+                    nav_date=fund_info.get("nav_date"),
+                    source=fund_info.get("source"),
                 )
+
+                if db is not None:
+                    snapshots.append(
+                        FundSnapshot(
+                            fund_code=position.fund_code,
+                            nav_date=None,
+                            unit_nav=fund_info.get("unit_nav"),
+                            estimated_nav=fund_info.get("estimated_nav"),
+                            change_rate=fund_info.get("change_rate"),
+                            source=fund_info.get("source") or "tiantian-fund",
+                        )
+                    )
+
                 items.append(item)
                 total_cost += item.cost_value
                 total_market_value += item.market_value or 0.0
@@ -174,6 +233,10 @@ class ValuationService:
                         error=str(exc),
                     )
                 )
+
+        if db is not None and snapshots:
+            db.add_all(snapshots)
+            db.commit()
 
         total_profit = round(total_market_value - total_cost, 4)
         total_profit_rate = round(total_profit / total_cost, 6) if total_cost else None
